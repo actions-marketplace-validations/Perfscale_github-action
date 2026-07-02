@@ -85,10 +85,11 @@ runs:
         asset="perfscale-${os}-${arch}${ext}"
 
         if [ "${PERFSCALE_VERSION}" = "latest" ]; then
-          # Resolve into a variable first — piping `curl | grep -m1` makes grep
-          # exit early, closing the pipe, so curl dies with code 23 under pipefail.
-          resp=$(curl -fsSL "https://api.github.com/repos/Perfscale/perfscale/releases/latest")
-          tag=$(printf '%s\n' "${resp}" | grep '"tag_name"' | head -n1 | sed -E 's/.*"tag_name" *: *"([^"]+)".*/\1/')
+          # Resolve the tag from the /releases/latest redirect instead of the
+          # REST API: api.github.com rate-limits unauthenticated calls per IP
+          # (403 on shared runner pools), while the web redirect does not.
+          loc=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/Perfscale/perfscale/releases/latest")
+          tag="${loc##*/tag/}"
         else
           tag="${PERFSCALE_VERSION}"
         fi
