@@ -85,8 +85,10 @@ runs:
         asset="perfscale-${os}-${arch}${ext}"
 
         if [ "${PERFSCALE_VERSION}" = "latest" ]; then
-          tag=$(curl -fsSL "https://api.github.com/repos/Perfscale/perfscale/releases/latest" \
-            | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name" *: *"([^"]+)".*/\1/')
+          # Resolve into a variable first — piping `curl | grep -m1` makes grep
+          # exit early, closing the pipe, so curl dies with code 23 under pipefail.
+          resp=$(curl -fsSL "https://api.github.com/repos/Perfscale/perfscale/releases/latest")
+          tag=$(printf '%s\n' "${resp}" | grep '"tag_name"' | head -n1 | sed -E 's/.*"tag_name" *: *"([^"]+)".*/\1/')
         else
           tag="${PERFSCALE_VERSION}"
         fi
@@ -190,6 +192,12 @@ runs:
         for f in summary.json summary.csv *.csv *_stats.csv results.json; do
           for m in ${f}; do [ -f "${m}" ] && cp "${m}" "${staging}/" 2>/dev/null || true; done
         done
+
+        # Never let zip fail on an empty staging dir (e.g. when the run step
+        # failed before producing a summary) — that would mask the real error.
+        if [ -z "$(ls -A "${staging}")" ]; then
+          echo "no metrics produced" > "${staging}/EMPTY.txt"
+        fi
 
         if command -v zip >/dev/null 2>&1; then
           ( cd "${staging}" && zip -qr - . ) > "${out}"
