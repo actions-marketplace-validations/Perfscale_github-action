@@ -1,0 +1,204 @@
+name: 'perfscale load test'
+description: 'Run a load test with perfscale (k6, locust, or the native step engine) and collect the metrics as an artifact.'
+author: 'Perfscale'
+branding:
+  icon: 'activity'
+  color: 'purple'
+
+inputs:
+  version:
+    description: 'perfscale release to install (a tag like v0.2.0, or "latest").'
+    required: false
+    default: 'latest'
+  k6:
+    description: 'Path to a k6 .js script. Runs via `perfscale run --k6`. Mutually exclusive with `locust` and `file`.'
+    required: false
+    default: ''
+  locust:
+    description: 'Path to a locustfile. Runs via `perfscale run --locust`. Mutually exclusive with `k6` and `file`.'
+    required: false
+    default: ''
+  file:
+    description: 'Path to a native test.yaml. Runs the built-in step engine via `perfscale run -f`. Requires `config`.'
+    required: false
+    default: ''
+  config:
+    description: 'Path to config.yaml (`vus`, `duration`, optional `report.url`). Required with `file`, optional for `locust`.'
+    required: false
+    default: ''
+  host:
+    description: 'Target base URL for the locust engine (`--host`).'
+    required: false
+    default: ''
+  report:
+    description: 'POST the summary to a `perfscale serve` instance after the run (`--report`).'
+    required: false
+    default: ''
+  args:
+    description: 'Extra raw arguments appended verbatim to `perfscale run`.'
+    required: false
+    default: ''
+  output:
+    description: 'Path of the zip artifact holding the run summary and any generated files.'
+    required: false
+    default: 'perfscale-output.zip'
+  working-directory:
+    description: 'Directory to run perfscale from.'
+    required: false
+    default: '.'
+
+outputs:
+  summary-file:
+    description: 'Path to the captured run summary (perfscale stdout).'
+    value: ${{ steps.run.outputs.summary-file }}
+  output-file:
+    description: 'Path to the zip artifact containing the summary and generated metrics files.'
+    value: ${{ steps.pack.outputs.output-file }}
+  exit-code:
+    description: 'Exit code returned by `perfscale run`.'
+    value: ${{ steps.run.outputs.exit-code }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install perfscale
+      shell: bash
+      env:
+        PERFSCALE_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+
+        case "${RUNNER_OS}" in
+          Linux)   os=linux ;;
+          macOS)   os=darwin ;;
+          Windows) os=windows ;;
+          *) echo "::error::unsupported runner OS: ${RUNNER_OS}"; exit 1 ;;
+        esac
+        case "${RUNNER_ARCH}" in
+          X64)   arch=amd64 ;;
+          ARM64) arch=arm64 ;;
+          *) echo "::error::unsupported runner arch: ${RUNNER_ARCH}"; exit 1 ;;
+        esac
+
+        ext=""
+        [ "$os" = "windows" ] && ext=".exe"
+        asset="perfscale-${os}-${arch}${ext}"
+
+        if [ "${PERFSCALE_VERSION}" = "latest" ]; then
+          tag=$(curl -fsSL "https://api.github.com/repos/Perfscale/perfscale/releases/latest" \
+            | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name" *: *"([^"]+)".*/\1/')
+        else
+          tag="${PERFSCALE_VERSION}"
+        fi
+        if [ -z "${tag}" ]; then
+          echo "::error::could not resolve perfscale release tag"; exit 1
+        fi
+        echo "Installing perfscale ${tag} (${asset})"
+
+        base="https://github.com/Perfscale/perfscale/releases/download/${tag}"
+        bindir="${RUNNER_TEMP}/perfscale-bin"
+        mkdir -p "${bindir}"
+        curl -fsSL -o "${bindir}/${asset}" "${base}/${asset}"
+
+        # Verify checksum against the release's sha256sums.txt
+        curl -fsSL -o "${bindir}/sha256sums.txt" "${base}/sha256sums.txt"
+        expected=$(grep " ${asset}\$" "${bindir}/sha256sums.txt" | awk '{print $1}' | head -n1)
+        if [ -n "${expected}" ]; then
+          if command -v sha256sum >/dev/null 2>&1; then
+            actual=$(sha256sum "${bindir}/${asset}" | awk '{print $1}')
+          else
+            actual=$(shasum -a 256 "${bindir}/${asset}" | awk '{print $1}')
+          fi
+          if [ "${expected}" != "${actual}" ]; then
+            echo "::error::checksum mismatch for ${asset}: expected ${expected}, got ${actual}"; exit 1
+          fi
+          echo "checksum ok: ${asset}"
+        else
+          echo "::warning::no checksum entry for ${asset} in sha256sums.txt — skipping verification"
+        fi
+
+        target="${bindir}/perfscale${ext}"
+        mv "${bindir}/${asset}" "${target}"
+        chmod +x "${target}"
+        echo "${bindir}" >> "${GITHUB_PATH}"
+
+    - name: Run perfscale
+      id: run
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        IN_K6: ${{ inputs.k6 }}
+        IN_LOCUST: ${{ inputs.locust }}
+        IN_FILE: ${{ inputs.file }}
+        IN_CONFIG: ${{ inputs.config }}
+        IN_HOST: ${{ inputs.host }}
+        IN_REPORT: ${{ inputs.report }}
+        IN_ARGS: ${{ inputs.args }}
+      run: |
+        set -uo pipefail
+
+        # Exactly one engine flag is required.
+        engines=0
+        [ -n "${IN_K6}" ] && engines=$((engines+1))
+        [ -n "${IN_LOCUST}" ] && engines=$((engines+1))
+        [ -n "${IN_FILE}" ] && engines=$((engines+1))
+        if [ "${engines}" -ne 1 ]; then
+          echo "::error::exactly one of 'k6', 'locust', or 'file' must be set (got ${engines})"; exit 1
+        fi
+        if [ -n "${IN_FILE}" ] && [ -z "${IN_CONFIG}" ]; then
+          echo "::error::'config' is required when 'file' (native engine) is set"; exit 1
+        fi
+
+        cmd=(perfscale run)
+        [ -n "${IN_K6}" ]     && cmd+=(--k6 "${IN_K6}")
+        [ -n "${IN_LOCUST}" ] && cmd+=(--locust "${IN_LOCUST}")
+        [ -n "${IN_FILE}" ]   && cmd+=(-f "${IN_FILE}")
+        [ -n "${IN_CONFIG}" ] && cmd+=(-c "${IN_CONFIG}")
+        [ -n "${IN_HOST}" ]   && cmd+=(--host "${IN_HOST}")
+        [ -n "${IN_REPORT}" ] && cmd+=(--report "${IN_REPORT}")
+        # shellcheck disable=SC2206
+        [ -n "${IN_ARGS}" ]   && cmd+=(${IN_ARGS})
+
+        summary="${RUNNER_TEMP}/perfscale-summary.txt"
+        echo "+ ${cmd[*]}"
+        "${cmd[@]}" | tee "${summary}"
+        code=${PIPESTATUS[0]}
+
+        echo "summary-file=${summary}" >> "${GITHUB_OUTPUT}"
+        echo "exit-code=${code}" >> "${GITHUB_OUTPUT}"
+        exit "${code}"
+
+    - name: Pack metrics
+      id: pack
+      if: always()
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        IN_OUTPUT: ${{ inputs.output }}
+        SUMMARY_FILE: ${{ steps.run.outputs.summary-file }}
+      run: |
+        set -uo pipefail
+
+        out="${IN_OUTPUT}"
+        staging="${RUNNER_TEMP}/perfscale-out"
+        rm -rf "${staging}"; mkdir -p "${staging}"
+
+        if [ -n "${SUMMARY_FILE:-}" ] && [ -f "${SUMMARY_FILE}" ]; then
+          cp "${SUMMARY_FILE}" "${staging}/summary.txt"
+        fi
+        # Common metric artifacts perfscale / underlying engines may drop.
+        for f in summary.json summary.csv *.csv *_stats.csv results.json; do
+          for m in ${f}; do [ -f "${m}" ] && cp "${m}" "${staging}/" 2>/dev/null || true; done
+        done
+
+        if command -v zip >/dev/null 2>&1; then
+          ( cd "${staging}" && zip -qr - . ) > "${out}"
+        elif command -v powershell >/dev/null 2>&1; then
+          powershell -NoProfile -Command "Compress-Archive -Path '${staging}/*' -DestinationPath '${out}' -Force"
+        else
+          echo "::warning::no zip tool available — writing a tar.gz instead of a zip"
+          tar -czf "${out}" -C "${staging}" .
+        fi
+
+        echo "output-file=${out}" >> "${GITHUB_OUTPUT}"
+        echo "packed metrics into ${out}"

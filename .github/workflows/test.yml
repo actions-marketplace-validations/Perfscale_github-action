@@ -1,0 +1,37 @@
+name: test action
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run native step engine
+        id: loadtest
+        uses: ./
+        with:
+          file: examples/hello.test.yaml
+          config: examples/hello.config.yaml
+
+      - name: Assert artifact exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="${{ steps.loadtest.outputs.output-file }}"
+          echo "exit-code=${{ steps.loadtest.outputs.exit-code }}"
+          test -s "${out}" || { echo "missing output artifact: ${out}"; exit 1; }
+          echo "ok: ${out}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: perfscale-metrics-${{ matrix.os }}
+          path: ${{ steps.loadtest.outputs.output-file }}
