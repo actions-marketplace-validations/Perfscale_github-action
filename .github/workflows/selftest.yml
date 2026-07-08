@@ -1,0 +1,72 @@
+name: selftest
+
+# Exercise the action end to end on every change: install the latest
+# perfscale release, run the native engine against a local HTTP server,
+# and assert the summary artifacts the README promises.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  native:
+    name: native engine (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Start a local target
+        shell: bash
+        run: |
+          python3 -m http.server 18999 &
+          for _ in $(seq 1 20); do
+            curl -fs http://127.0.0.1:18999/ >/dev/null && break
+            sleep 0.5
+          done
+          curl -fs http://127.0.0.1:18999/ >/dev/null
+
+      - name: Run the action under test
+        id: loadtest
+        uses: ./
+        with:
+          file: .github/selftest/test.yaml
+          config: .github/selftest/config.yaml
+
+      - name: Assert outputs
+        shell: bash
+        env:
+          SUMMARY_JSON: ${{ steps.loadtest.outputs.summary-json }}
+          SUMMARY_FILE: ${{ steps.loadtest.outputs.summary-file }}
+          OUTPUT_FILE: ${{ steps.loadtest.outputs.output-file }}
+          EXIT_CODE: ${{ steps.loadtest.outputs.exit-code }}
+        run: |
+          set -euo pipefail
+
+          [ "${EXIT_CODE}" = "0" ] || { echo "::error::exit-code=${EXIT_CODE}"; exit 1; }
+          [ -f "${SUMMARY_FILE}" ] || { echo "::error::summary-file missing"; exit 1; }
+          [ -f "${OUTPUT_FILE}" ]  || { echo "::error::zip artifact missing"; exit 1; }
+
+          [ -n "${SUMMARY_JSON}" ] && [ -f "${SUMMARY_JSON}" ] \
+            || { echo "::error::summary-json missing — --summary-export did not run"; exit 1; }
+          jq -e '.meta.engine == "native"
+                 and .meta.vus == 2
+                 and .summary.total_requests > 0
+                 and .summary.error_rate == 0' "${SUMMARY_JSON}"
+
+          # job-summary: true must have written the Markdown table.
+          grep -q "perfscale run summary" "${GITHUB_STEP_SUMMARY}" \
+            || { echo "::error::job summary table missing"; exit 1; }
+
+      - name: Assert zip contains summary.json
+        shell: bash
+        env:
+          OUTPUT_FILE: ${{ steps.loadtest.outputs.output-file }}
+        run: |
+          unzip -l "${OUTPUT_FILE}" | grep -q "summary.json" \
+            || { echo "::error::summary.json not packed into the artifact"; exit 1; }
