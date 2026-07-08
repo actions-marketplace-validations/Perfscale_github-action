@@ -38,6 +38,14 @@ inputs:
     description: 'Extra raw arguments appended verbatim to `perfscale run`.'
     required: false
     default: ''
+  summary-export:
+    description: 'Path for the machine-readable run summary (JSON: metrics plus engine/VUs/duration/timestamp metadata), written via `--summary-export`. Included in the zip artifact. Set to empty to disable. Needs a perfscale release with --summary-export; older versions degrade with a warning.'
+    required: false
+    default: 'perfscale-summary.json'
+  job-summary:
+    description: 'Render the run summary as a Markdown table in the GitHub Actions job summary ($GITHUB_STEP_SUMMARY). Needs a perfscale release with --summary-export; older versions degrade with a warning.'
+    required: false
+    default: 'true'
   output:
     description: 'Path of the zip artifact holding the run summary and any generated files.'
     required: false
@@ -51,6 +59,9 @@ outputs:
   summary-file:
     description: 'Path to the captured run summary (perfscale stdout).'
     value: ${{ steps.run.outputs.summary-file }}
+  summary-json:
+    description: 'Path to the machine-readable JSON summary (empty when summary-export is disabled or unsupported by the installed perfscale).'
+    value: ${{ steps.run.outputs.summary-json }}
   output-file:
     description: 'Path to the zip artifact containing the summary and generated metrics files.'
     value: ${{ steps.pack.outputs.output-file }}
@@ -137,6 +148,8 @@ runs:
         IN_HOST: ${{ inputs.host }}
         IN_REPORT: ${{ inputs.report }}
         IN_ARGS: ${{ inputs.args }}
+        IN_SUMMARY_EXPORT: ${{ inputs.summary-export }}
+        IN_JOB_SUMMARY: ${{ inputs.job-summary }}
       run: |
         set -uo pipefail
 
@@ -162,12 +175,33 @@ runs:
         # shellcheck disable=SC2206
         [ -n "${IN_ARGS}" ]   && cmd+=(${IN_ARGS})
 
+        # Structured exports need a perfscale with --summary-export; degrade
+        # with a warning on older releases instead of failing the run.
+        summary_json=""
+        if [ -n "${IN_SUMMARY_EXPORT}" ] || [ "${IN_JOB_SUMMARY}" = "true" ]; then
+          if perfscale run --help 2>/dev/null | grep -q -- '--summary-export'; then
+            if [ -n "${IN_SUMMARY_EXPORT}" ]; then
+              summary_json="${IN_SUMMARY_EXPORT}"
+              cmd+=(--summary-export "${summary_json}")
+            fi
+            if [ "${IN_JOB_SUMMARY}" = "true" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+              # $GITHUB_STEP_SUMMARY has no extension → --summary-format md
+              # applies to it, while the .json export keeps JSON.
+              cmd+=(--summary-export "${GITHUB_STEP_SUMMARY}" --summary-format md)
+            fi
+          else
+            echo "::warning::this perfscale release has no --summary-export; skipping summary-export/job-summary (set 'version' to a newer release)"
+          fi
+        fi
+
         summary="${RUNNER_TEMP}/perfscale-summary.txt"
         echo "+ ${cmd[*]}"
         "${cmd[@]}" | tee "${summary}"
         code=${PIPESTATUS[0]}
 
+        [ -n "${summary_json}" ] && [ ! -f "${summary_json}" ] && summary_json=""
         echo "summary-file=${summary}" >> "${GITHUB_OUTPUT}"
+        echo "summary-json=${summary_json}" >> "${GITHUB_OUTPUT}"
         echo "exit-code=${code}" >> "${GITHUB_OUTPUT}"
         exit "${code}"
 
@@ -179,6 +213,7 @@ runs:
       env:
         IN_OUTPUT: ${{ inputs.output }}
         SUMMARY_FILE: ${{ steps.run.outputs.summary-file }}
+        SUMMARY_JSON: ${{ steps.run.outputs.summary-json }}
       run: |
         set -uo pipefail
 
@@ -188,6 +223,9 @@ runs:
 
         if [ -n "${SUMMARY_FILE:-}" ] && [ -f "${SUMMARY_FILE}" ]; then
           cp "${SUMMARY_FILE}" "${staging}/summary.txt"
+        fi
+        if [ -n "${SUMMARY_JSON:-}" ] && [ -f "${SUMMARY_JSON}" ]; then
+          cp "${SUMMARY_JSON}" "${staging}/summary.json"
         fi
         # Common metric artifacts perfscale / underlying engines may drop.
         for f in summary.json summary.csv *.csv *_stats.csv results.json; do
