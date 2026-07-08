@@ -59,8 +59,11 @@ jobs:
                  and .summary.total_requests > 0
                  and .summary.error_rate == 0' "${SUMMARY_JSON}"
 
-          # job-summary: true must have written the Markdown table.
-          grep -q "perfscale run summary" "${GITHUB_STEP_SUMMARY}" \
+          # job-summary: true must have written the Markdown table. Every
+          # step gets its own $GITHUB_STEP_SUMMARY file, so the action's
+          # table lives in a sibling file — grep across all of them.
+          cat "${RUNNER_TEMP}/_runner_file_commands/"step_summary_* 2>/dev/null \
+            | grep -q "perfscale run summary" \
             || { echo "::error::job summary table missing"; exit 1; }
 
       - name: Assert zip contains summary.json
