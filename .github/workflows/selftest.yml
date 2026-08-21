@@ -101,7 +101,8 @@ jobs:
             | tar -xz -C "${RUNNER_TEMP}"
           echo "${RUNNER_TEMP}/apache-jmeter-5.6.3/bin" >> "${GITHUB_PATH}"
           java -version 2>&1 | head -1
-          jmeter --version 2>&1 | tail -1
+          # $GITHUB_PATH applies to the NEXT steps — call by full path here.
+          "${RUNNER_TEMP}/apache-jmeter-5.6.3/bin/jmeter" --version 2>&1 | tail -1
 
       - name: Run the action under test
         id: loadtest
