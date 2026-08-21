@@ -1,8 +1,8 @@
 # perfscale load test action
 
 Run a load test with [**perfscale**](https://github.com/Perfscale/perfscale) —
-k6, locust, or perfscale's own native step engine — and collect the metrics as
-a downloadable artifact, straight from a GitHub Actions workflow.
+k6, locust, JMeter, or perfscale's own native step engine — and collect the
+metrics as a downloadable artifact, straight from a GitHub Actions workflow.
 
 The action downloads the pinned `perfscale` release binary for the runner's
 OS/arch, verifies its `sha256`, runs your test, and packs the run summary plus
@@ -35,7 +35,7 @@ Upload the produced artifact:
 
 ### Engines
 
-Set **exactly one** of `k6`, `locust`, or `file`.
+Set **exactly one** of `k6`, `locust`, `jmeter`, or `file`.
 
 ```yaml
 # k6
@@ -49,12 +49,34 @@ Set **exactly one** of `k6`, `locust`, or `file`.
     locust: examples/hello.locust.py
     host: https://example.com
 
+# JMeter — the plan owns the load shape; needs the `jmeter` binary on PATH
+- uses: Perfscale/github-action@v1
+  with:
+    jmeter: examples/hello.jmx
+
 # native step engine (requires config)
 - uses: Perfscale/github-action@v1
   with:
     file: examples/hello.test.yaml
     config: examples/hello.config.yaml
 ```
+
+`k6`, `locust`, and `jmeter` shell out to the respective binary on `PATH` —
+the action installs perfscale itself, not the engines. `k6`/`locust` are
+one-package installs; JMeter needs Java (preinstalled on GitHub-hosted
+runners) plus the distribution tarball:
+
+```yaml
+- name: Install JMeter
+  run: |
+    curl -fsSL https://archive.apache.org/dist/jmeter/binaries/apache-jmeter-5.6.3.tgz \
+      | tar -xz -C "$RUNNER_TEMP"
+    echo "$RUNNER_TEMP/apache-jmeter-5.6.3/bin" >> "$GITHUB_PATH"
+```
+
+JMeter runs emit no latency percentiles — the final console `summary =` line
+is translated into the summary block with `avg`/`min`/`max` only, and the
+jmeter process exit code is the gate (no thresholds integration).
 
 ## Inputs
 
@@ -63,6 +85,7 @@ Set **exactly one** of `k6`, `locust`, or `file`.
 | `version` | `latest` | perfscale release to install (tag like `v0.2.0`, or `latest`). |
 | `k6` | — | Path to a k6 `.js` script (`perfscale run --k6`). |
 | `locust` | — | Path to a locustfile (`perfscale run --locust`). |
+| `jmeter` | — | Path to a JMeter `.jmx` test plan (`perfscale run --jmeter`). Requires `jmeter` on `PATH`. |
 | `file` | — | Path to a native `test.yaml` (`perfscale run -f`). Requires `config`. |
 | `config` | — | Path to `config.yaml` (`-c`). Required with `file`. |
 | `host` | — | Target base URL for the locust engine (`--host`). |

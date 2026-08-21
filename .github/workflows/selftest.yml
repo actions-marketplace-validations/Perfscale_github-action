@@ -73,3 +73,55 @@ jobs:
         run: |
           unzip -l "${OUTPUT_FILE}" | grep -q "summary.json" \
             || { echo "::error::summary.json not packed into the artifact"; exit 1; }
+
+  jmeter:
+    name: jmeter engine
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Start a local target
+        shell: bash
+        run: |
+          python3 -m http.server 18999 &
+          for _ in $(seq 1 20); do
+            curl -fs http://127.0.0.1:18999/ >/dev/null && break
+            sleep 0.5
+          done
+          curl -fs http://127.0.0.1:18999/ >/dev/null
+
+      # perfscale shells out to the `jmeter` binary — install it (Java is
+      # preinstalled on the runner). Pinned version, archive.apache.org keeps
+      # old releases (dlcdn only the latest).
+      - name: Install JMeter
+        shell: bash
+        run: |
+          curl -fsSL https://archive.apache.org/dist/jmeter/binaries/apache-jmeter-5.6.3.tgz \
+            | tar -xz -C "${RUNNER_TEMP}"
+          echo "${RUNNER_TEMP}/apache-jmeter-5.6.3/bin" >> "${GITHUB_PATH}"
+          java -version 2>&1 | head -1
+          jmeter --version 2>&1 | tail -1
+
+      - name: Run the action under test
+        id: loadtest
+        uses: ./
+        with:
+          jmeter: .github/selftest/hello.jmx
+
+      - name: Assert outputs
+        shell: bash
+        env:
+          SUMMARY_JSON: ${{ steps.loadtest.outputs.summary-json }}
+          EXIT_CODE: ${{ steps.loadtest.outputs.exit-code }}
+        run: |
+          set -euo pipefail
+
+          [ "${EXIT_CODE}" = "0" ] || { echo "::error::exit-code=${EXIT_CODE}"; exit 1; }
+          [ -n "${SUMMARY_JSON}" ] && [ -f "${SUMMARY_JSON}" ] \
+            || { echo "::error::summary-json missing — --summary-export did not run"; exit 1; }
+          # 2 threads × 5 loops = 10 samples; vus/duration are null for
+          # --jmeter (the plan owns the load shape).
+          jq -e '.meta.engine == "jmeter"
+                 and .summary.total_requests == 10
+                 and .summary.error_rate == 0' "${SUMMARY_JSON}"

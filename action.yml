@@ -1,5 +1,5 @@
 name: 'perfscale load test'
-description: 'Run a load test with perfscale (k6, locust, or the native step engine) and collect the metrics as an artifact.'
+description: 'Run a load test with perfscale (k6, locust, JMeter, or the native step engine) and collect the metrics as an artifact.'
 author: 'Perfscale'
 branding:
   icon: 'activity'
@@ -11,15 +11,19 @@ inputs:
     required: false
     default: 'latest'
   k6:
-    description: 'Path to a k6 .js script. Runs via `perfscale run --k6`. Mutually exclusive with `locust` and `file`.'
+    description: 'Path to a k6 .js script. Runs via `perfscale run --k6`. Mutually exclusive with `locust`, `jmeter` and `file`.'
     required: false
     default: ''
   locust:
-    description: 'Path to a locustfile. Runs via `perfscale run --locust`. Mutually exclusive with `k6` and `file`.'
+    description: 'Path to a locustfile. Runs via `perfscale run --locust`. Mutually exclusive with `k6`, `jmeter` and `file`.'
+    required: false
+    default: ''
+  jmeter:
+    description: 'Path to a JMeter .jmx test plan. Runs via `perfscale run --jmeter` (non-GUI). Mutually exclusive with `k6`, `locust` and `file`. Requires the `jmeter` binary on PATH (Java needed).'
     required: false
     default: ''
   file:
-    description: 'Path to a native test.yaml. Runs the built-in step engine via `perfscale run -f`. Requires `config`.'
+    description: 'Path to a native test.yaml. Runs the built-in step engine via `perfscale run -f`. Requires `config`. Mutually exclusive with `k6`, `locust` and `jmeter`.'
     required: false
     default: ''
   config:
@@ -143,6 +147,7 @@ runs:
       env:
         IN_K6: ${{ inputs.k6 }}
         IN_LOCUST: ${{ inputs.locust }}
+        IN_JMETER: ${{ inputs.jmeter }}
         IN_FILE: ${{ inputs.file }}
         IN_CONFIG: ${{ inputs.config }}
         IN_HOST: ${{ inputs.host }}
@@ -157,9 +162,10 @@ runs:
         engines=0
         [ -n "${IN_K6}" ] && engines=$((engines+1))
         [ -n "${IN_LOCUST}" ] && engines=$((engines+1))
+        [ -n "${IN_JMETER}" ] && engines=$((engines+1))
         [ -n "${IN_FILE}" ] && engines=$((engines+1))
         if [ "${engines}" -ne 1 ]; then
-          echo "::error::exactly one of 'k6', 'locust', or 'file' must be set (got ${engines})"; exit 1
+          echo "::error::exactly one of 'k6', 'locust', 'jmeter', or 'file' must be set (got ${engines})"; exit 1
         fi
         if [ -n "${IN_FILE}" ] && [ -z "${IN_CONFIG}" ]; then
           echo "::error::'config' is required when 'file' (native engine) is set"; exit 1
@@ -168,6 +174,7 @@ runs:
         cmd=(perfscale run)
         [ -n "${IN_K6}" ]     && cmd+=(--k6 "${IN_K6}")
         [ -n "${IN_LOCUST}" ] && cmd+=(--locust "${IN_LOCUST}")
+        [ -n "${IN_JMETER}" ] && cmd+=(--jmeter "${IN_JMETER}")
         [ -n "${IN_FILE}" ]   && cmd+=(-f "${IN_FILE}")
         [ -n "${IN_CONFIG}" ] && cmd+=(-c "${IN_CONFIG}")
         [ -n "${IN_HOST}" ]   && cmd+=(--host "${IN_HOST}")
