@@ -37,6 +37,11 @@ jobs:
         with:
           file: .github/selftest/test.yaml
           config: .github/selftest/config.yaml
+          # Also export the Markdown table to a plain file — asserting the
+          # table via $GITHUB_STEP_SUMMARY's _runner_file_commands path is
+          # racy (the runner consumes those files between steps; timing
+          # differs across OSes).
+          args: --summary-export summary.md
 
       - name: Assert outputs
         shell: bash
@@ -59,12 +64,10 @@ jobs:
                  and .summary.total_requests > 0
                  and .summary.error_rate == 0' "${SUMMARY_JSON}"
 
-          # job-summary: true must have written the Markdown table. Every
-          # step gets its own $GITHUB_STEP_SUMMARY file, so the action's
-          # table lives in a sibling file — grep across all of them.
-          cat "${RUNNER_TEMP}/_runner_file_commands/"step_summary_* 2>/dev/null \
-            | grep -q "perfscale run summary" \
-            || { echo "::error::job summary table missing"; exit 1; }
+          # The Markdown export (same renderer as the job-summary table)
+          # must contain the table.
+          grep -q "perfscale run summary" summary.md \
+            || { echo "::error::markdown summary table missing"; exit 1; }
 
       - name: Assert zip contains summary.json
         shell: bash
