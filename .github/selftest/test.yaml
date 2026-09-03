@@ -1,0 +1,9 @@
+# Self-test workload: hits the python http.server the workflow starts.
+steps:
+  - name: local target
+    use: std/http@v1
+    with:
+      method: GET
+      url: http://127.0.0.1:18999/
+    check:
+      status: 200
