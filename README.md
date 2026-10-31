@@ -5,7 +5,9 @@ k6, locust, JMeter, or perfscale's own native step engine — and collect the
 metrics as a downloadable artifact, straight from a GitHub Actions workflow.
 
 The action downloads the pinned `perfscale` release binary for the runner's
-OS/arch, verifies its `sha256`, runs your test, and packs the run summary plus
+OS/arch, verifies its `sha256` against the release's `sha256sums.txt` (fails
+closed when the checksum is missing or mismatched), runs your test, and packs
+the run summary plus
 any generated metrics files into a single zip. By default it also renders the
 metric table straight into the **GitHub Actions job summary** and writes a
 machine-readable `perfscale-summary.json` (requests, RPS, latency percentiles,
@@ -78,11 +80,61 @@ JMeter runs emit no latency percentiles — the final console `summary =` line
 is translated into the summary block with `avg`/`min`/`max` only, and the
 jmeter process exit code is the gate (no thresholds integration).
 
+### Custom libraries from GitHub
+
+A native test can use custom WASM libraries published as GitHub release
+assets. Pin the release URL and its SHA-256 digest in `config.yaml`:
+
+```yaml
+vus: 1
+duration: 3s
+seed: 42
+libraries:
+  - use: https://github.com/Perfscale/faker/releases/download/v0.1.0/faker.wasm
+    sha256: '742a19abda8478e040907838850482702257b894210f1faee2b3660fa877cdab'
+    as: faker
+    capabilities: []
+    with:
+      language: en
+      encoding: url
+```
+
+```yaml
+- uses: Perfscale/github-action@v1
+  with:
+    version: v0.28.0
+    file: examples/faker.test.yaml
+    config: examples/faker.config.yaml
+```
+
+Before a native `file` run, the action calls `perfscale install` for both YAML
+documents. It fetches remote components, verifies their declared digests,
+writes or updates `perfscale.lock`, and caches them by content. The subsequent
+run resolves libraries through the lockfile and cache. An installation or
+digest failure stops the action before the test runs and sets a nonzero
+`exit-code`. Use a perfscale release that supports `perfscale install`, such
+as v0.28.0.
+
+Commit `perfscale.lock` alongside the YAML that declares the library for
+reproducible, offline resolution once the artifact is cached. The same
+`libraries:` declaration works for other SDK-built components. Faker's
+`language` option defaults to `en`. Its `encoding` defaults to `plain`; use
+`url` for percent-encoded values in form bodies and URL query strings, not for
+ordinary JSON values. Generated values are available through tokens such as
+`${faker.internet(email)}` and `${faker.address(city)}`.
+
+See the complete [Faker config](examples/faker.config.yaml),
+[in-memory SQLite test](examples/faker.test.yaml), and generated
+[lockfile](examples/perfscale.lock). The test needs no external HTTP service.
+See [Perfscale Faker](https://github.com/Perfscale/faker) for all available
+generators and options.
+
 ## Inputs
 
 | Input | Default | Description |
 |---|---|---|
 | `version` | `latest` | perfscale release to install (tag like `v0.2.0`, or `latest`). |
+| `verify-checksum` | `true` | Verify the binary against the release's `sha256sums.txt`. Set to `false` to skip verification when the release ships no checksum entry for your OS/arch (not recommended). |
 | `k6` | — | Path to a k6 `.js` script (`perfscale run --k6`). |
 | `locust` | — | Path to a locustfile (`perfscale run --locust`). |
 | `jmeter` | — | Path to a JMeter `.jmx` test plan (`perfscale run --jmeter`). Requires `jmeter` on `PATH`. |
@@ -100,6 +152,10 @@ jmeter process exit code is the gate (no thresholds integration).
 `--summary-export`; on older releases the action degrades to a warning and
 runs the test without them.
 
+If the runner has no zip tool, the artifact is packed as `.tar.gz` instead —
+the `output` extension is adjusted automatically and `output-file` points at
+the real path.
+
 ## Outputs
 
 | Output | Description |
@@ -107,7 +163,7 @@ runs the test without them.
 | `summary-file` | Path to the captured run summary (perfscale stdout). |
 | `summary-json` | Path to the machine-readable JSON summary (empty when disabled/unsupported). |
 | `output-file` | Path to the zip artifact with the summary and metrics files. |
-| `exit-code` | Exit code returned by `perfscale run`. |
+| `exit-code` | Exit code returned by `perfscale install` or `perfscale run`. |
 
 ### Consuming the JSON summary
 
